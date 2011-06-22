@@ -3,6 +3,7 @@ import shlex
 import argparse
 import sys
 import dbus
+import textwrap
 
 
 service_info = {}
@@ -32,6 +33,9 @@ def service_object_path(service_name):
 
 
 class Handler(dict):
+    
+    paragraphs = [""]
+
     def handle(self,tokens):
 	if tokens[0] == "help":
 	    return self.help("","--")
@@ -42,23 +46,57 @@ class Handler(dict):
 	first = tokens.pop(0)
 	return self[first].handle(tokens)
 
+    
     def help(self,prefix,delta):
-	answer = []
+	""" Build help string for handler. Build string consists of descripiton of the command + help string for each subcommand"""
+	answer = [ 
+	    self.description(prefix,delta),
+	    '\n\n'
+	    ]
 	for key,value in self.iteritems():
-	    answer.append("%s%s  %s\n"%(prefix,key,value.description()))
+	    # Form basic string, Then wrap it
+	    #item_desc = value.description(0,len(prefix+delta)
+	    #answer.append("%s%s  %s\n"%(prefix,key,value.description()))
+	    answer.append(prefix)
+	    answer.append(key+":")
 	    answer.append( value.help(prefix + delta,delta) )
-	    answer.append("\n")
+	    answer.append("\n\n")
 
-	return "".join(filter(lambda x: x is not None, answer))
+	return " ".join(filter(lambda x: x is not None, answer))
 
-    def description(self):
-	return ""
+    def description(self,prefix,delta):
+	""" Correctly build description of the command from several paragraphs. 
+	This methon is for developers convincience only
+	"""
+		
+	# First item in list has initial ident == 0
+	subsequent_indent = ' '*(len(prefix)+len(delta))
+
+	result = [ 
+		textwrap.fill(
+		self.paragraphs[0],
+		initial_indent='',
+		subsequent_indent=subsequent_indent
+		)
+		]
+	# Other items have initial ident == subsequent_indent
+	result += [ textwrap.fill(p,initial_indent=subsequent_indent,subsequent_indent=subsequent_indent)
+		for p in self.paragraphs[1:]
+		]
+
+	return "\n".join(result)
 
 
 
 
 
 class Stopper(Handler):
+    def __init__(self):
+	super(Stopper,self).__init__()
+	self.paragraphs = [ 
+	"Stop service. Be aware that stopping some services(e.g. nepomukstorageservice) will end really bad.", 
+	"Usage: stop <service1> <service2> ... <serviceN>"
+	]
     def handle_impl(self,tokens):
 	result = [self.stop(service) for service in tokens]
 	return "".join(result)
@@ -76,12 +114,16 @@ class Stopper(Handler):
 	    return  "No such service\n" % service
 
     def help(self,prefix,delta):
-	return None
+	return self.description(prefix,delta)
 
-    def description(self):
-	return "Stop service"
 
 class Starter(Handler):
+    def __init__(self):
+	self.paragraphs = [
+		"Start service. If service is running, then no actions are taken",
+		"Usage: start <service1> <service2> ... <serviceN>"
+		]
+
     def handle_impl(self,tokens):
 	result = [self.start(service) for service in tokens]
 	return "".join(result)
@@ -99,12 +141,16 @@ class Starter(Handler):
 	    return "No such service %s\n" % service
 
     def help(self,prefix,delta):
-	return None
+	return self.description(prefix,delta)
 
-    def description(self):
-	return "Start service"
 
 class Restarter(Starter,Stopper):
+    def __init__(self):
+	super(Restarter,self).__init__()
+	paragraphs = [ "Restart service. If service provides restart() method, then this method will be used. Otherwise service will be stoped and then started.",
+	"Usage: stop <service1> <service2> ... <serviceN>"
+	]
+
     def handle_impl(self,tokens):
 	result = [ self.restart(service) for service in tokens]
 	return "".join(result) 
@@ -113,12 +159,21 @@ class Restarter(Starter,Stopper):
 	return self.stop(service) + self.start(service)
 
     def help(self,prefix,delta):
-	return None
+	return self.description(prefix,delta)
 
-    def description(self):
-	return "Restart service"
 
 class Lister(Handler):
+    def __init__(self):
+	super(Lister,self).__init__()
+
+	self.paragraphs = [
+		"List status of the services. Displays whether service is running or not and some other information",
+		"Usage:",
+		"list <service1> <service2> ... <serviceN>",
+		"list all|available|running",
+		"In first invocation, lists statuses of selected services. In second invocation lists statuses of all available services( 'all' or 'available' ) or statuses of running services "
+		]
+
     def handle_impl(self,tokens):
 	if any(map(lambda x:x == "all" or x == 'available',tokens)):
 	    return self.list_available()
@@ -161,10 +216,8 @@ class Lister(Handler):
 	    return "No such service %s\n" %( service,)
 
     def help(self,prefix,delta):
-	return None
+	return self.description(prefix,delta)
 
-    def description(self):
-	return "List status of the services"
 
 
 service_handler = Handler()
@@ -172,8 +225,20 @@ service_handler["restart"] = Restarter()
 service_handler["stop"] = Stopper()
 service_handler["start"] = Starter()
 service_handler["list"] = Lister()
+service_handler.paragraphs = [ """ This command provids commands for common operation with Nepomuk services.
+(start, stop etc). It can not be used to execute service-specific command. For such purposes use dynamic
+comands, <service name> <opname> <arg1> <arg2> ... <arg2>""" ]
 
 main_handler = Handler()
+main_handler.paragraphs = [ 
+"This small utility is intended to control Nepomuk Server from command line. \
+It can work as a shell( repeatedly reading commands from STDIN and executing them) or \
+read commands from argv",
+"Examples:",
+"Restart strigi: nepomukserver-cli service restart strigi",
+"See running services: nepomukserver-cli list running"
+]
+
 main_handler["service"] = service_handler
 
 
