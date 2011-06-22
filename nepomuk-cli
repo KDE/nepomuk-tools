@@ -1,0 +1,220 @@
+#! /usr/bin/env python
+import shlex
+import argparse
+import sys
+import dbus
+
+
+service_info = {}
+def register_info(user_name,service_name):
+    service_info[user_name] = service_name
+    service_info[service_name] = service_name
+
+
+register_info('strigi' , 'nepomukstrigiservice')
+register_info('query' , "nepomukqueryservice") 
+register_info('digikam' , "digikamnepomukservice")
+register_info('storage' , "nepomukstorage") 
+register_info('removablestorage' , "nepomukremovablestorageservice") 
+register_info('backupsync' , "nepomukbackupsync") 
+register_info('filewatch' , "nepomukfilewatch" )
+
+def name_conversation(service_name):
+     name = service_name.lower()
+     return service_info[name]
+
+def service_address(service_name):
+    name = name_conversation(service_name)
+    return "org.kde.nepomuk.services."+name
+
+def service_object_path(service_name):
+    return  name_conversation(service_name)
+
+
+class Handler(dict):
+    def handle(self,tokens):
+	if tokens[0] == "help":
+	    return self.help("","--")
+	else:
+	    return self.handle_impl(tokens)
+
+    def handle_impl(self,tokens):
+	first = tokens.pop(0)
+	return self[first].handle(tokens)
+
+    def help(self,prefix,delta):
+	answer = []
+	for key,value in self.iteritems():
+	    answer.append("%s%s  %s\n"%(prefix,key,value.description()))
+	    answer.append( value.help(prefix + delta,delta) )
+	    answer.append("\n")
+
+	return "".join(filter(lambda x: x is not None, answer))
+
+    def description(self):
+	return ""
+
+
+
+
+
+class Stopper(Handler):
+    def handle_impl(self,tokens):
+	result = [self.stop(service) for service in tokens]
+	return "".join(result)
+
+    def stop(self,service):
+	try :
+	    canonical_name = name_conversation(service)
+	    is_running = service_manager.isServiceRunning(canonical_name)
+	    if is_running :
+		result =  service_manager.stopService(canonical_name)
+		return "Stopping %s %16s\n" % (service, "SUCCESS" if result else "FAIL")
+	    else:
+		return "Service %s not running\n" % service
+	except KeyError:
+	    return  "No such service\n" % service
+
+    def help(self,prefix,delta):
+	return None
+
+    def description(self):
+	return "Stop service"
+
+class Starter(Handler):
+    def handle_impl(self,tokens):
+	result = [self.start(service) for service in tokens]
+	return "".join(result)
+
+    def start(self,service):
+	try :
+	    canonical_name = name_conversation(service)
+	    is_running = service_manager.isServiceRunning(canonical_name)
+	    if not is_running :
+		result = service_manager.startService(canonical_name)
+		return "Starting %s %16s\n" % (service, "SUCCESS" if result else "FAIL")
+	    else:
+		return "Service %s is running\n" % service
+	except KeyError:
+	    return "No such service %s\n" % service
+
+    def help(self,prefix,delta):
+	return None
+
+    def description(self):
+	return "Start service"
+
+class Restarter(Starter,Stopper):
+    def handle_impl(self,tokens):
+	result = [ self.restart(service) for service in tokens]
+	return "".join(result) 
+
+    def restart(self,service):
+	return self.stop(service) + self.start(service)
+
+    def help(self,prefix,delta):
+	return None
+
+    def description(self):
+	return "Restart service"
+
+class Lister(Handler):
+    def handle_impl(self,tokens):
+	if any(map(lambda x:x == "all" or x == 'available',tokens)):
+	    return self.list_available()
+
+	elif any(map(lambda x:x == "running",tokens)):
+	    return self.list_running()
+
+	else:
+	    result = [ self.list_service(service) for service in tokens]
+	    return "".join(result)
+
+
+    def list_available(self):
+	available = service_manager.availableServices()
+	result = [ self.list_service(service) for service in available]
+	return "".join(result)
+
+    def list_running(self):
+	running = service_manager.availableServices()
+	result = [ self.list_service(service) for service in running]
+	return "".join(result)
+
+    def list_service(self,service):
+	try :
+	    canonical_name = name_conversation(service)
+	    is_running = service_manager.isServiceRunning(canonical_name)
+	    output = []
+	    format_string = "%-8s %s\n"
+	    if ( is_running ):
+		#sa = service_address(canonical_name)
+		#sop = service_object_path(canonical_name)
+		#service_object = session_bus.get_object(
+		#    sa,sop)
+		output = ['r',service]
+	    else:
+		output = ['n',service]
+
+	    return format_string % tuple(output)
+	except KeyError:
+	    return "No such service %s\n" %( service,)
+
+    def help(self,prefix,delta):
+	return None
+
+    def description(self):
+	return "List status of the services"
+
+
+service_handler = Handler()
+service_handler["restart"] = Restarter()
+service_handler["stop"] = Stopper()
+service_handler["start"] = Starter()
+service_handler["list"] = Lister()
+
+main_handler = Handler()
+main_handler["service"] = service_handler
+
+
+def execute_tokens(tokens):
+    try:
+	result = main_handler.handle(tokens)
+	print result
+    except IndexError:
+	print "Not enough arguments"
+    except KeyError,e:
+	print "Unknow command", e
+
+
+def start_shell():
+    pass
+
+
+parser = argparse.ArgumentParser(description="""
+CLI for Nepomuk Server.
+Used for launching,restarting and finishing services
+"""
+)
+parser.add_argument('tokens', metavar='TOKEN', type=str,nargs='*')
+
+args = parser.parse_args()
+
+try: 
+    session_bus = dbus.SessionBus()
+
+    server = session_bus.get_object("org.kde.NepomukServer","/nepomukserver")
+    server_interface = dbus.Interface(server,dbus_interface="ork.kde.NepomukServer")
+
+    service_manager = session_bus.get_object("org.kde.NepomukServer","/servicemanager")
+    service_manager_interface = dbus.Interface(service_manager,dbus_interface = "org.kde.Nepomuk.ServiceManager")
+
+except dbus.DBusException:
+    print "Can not connect to NepomukServer. Either NepomukServer or DBus are broken" 
+    sys.exit(1)
+
+if len(sys.argv) > 1:
+    execute_tokens(sys.argv[1:])
+else:
+    # Start interactive shell
+    start_shell()
