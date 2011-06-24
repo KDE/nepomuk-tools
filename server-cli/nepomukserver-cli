@@ -23,12 +23,16 @@ except IOError:
 atexit.register(readline.write_history_file, histfile)
 
 readline.set_history_length(100)
+readline.parse_and_bind("tab: complete")
 
 
 service_info = {}
+service_shortcuts = {}
 def register_info(user_name,service_name):
     service_info[user_name] = service_name
     service_info[service_name] = service_name
+    service_shortcuts[service_name] = user_name
+    service_shortcuts[user_name] = user_name
 
 
 register_info('strigi' , 'nepomukstrigiservice')
@@ -49,6 +53,12 @@ def service_address(service_name):
 
 def service_object_path(service_name):
     return  name_conversation(service_name)
+
+def short_name(service_name):
+    try:
+        return service_shortcuts[service_name]
+    except KeyError:
+        return None
 
 
 class Handler(dict):
@@ -105,6 +115,28 @@ class Handler(dict):
 
         return "\n".join(result)
 
+    def complete(self,tokens,state):
+        #print "tokens: ",tokens
+        if len(tokens) == 0:
+            return None
+        if len(tokens) == 1:
+            token = tokens[0]
+            if token in self.iterkeys():
+                return self[token].complete(tokens[1:],state)
+            else:
+                options = [ x for x in self.iterkeys() if x.startswith(token) ]
+                #print "Options: ",options
+                if state < len(options):
+                    return options[state]
+                else:
+                    return None
+        else:
+            token = tokens[0]
+            if token in self.iterkeys():
+                return self[token].complete(tokens[1:],state)
+            else:
+                return None
+
 
 
 
@@ -135,6 +167,17 @@ class Stopper(Handler):
     def help(self,prefix,delta):
         return self.description(prefix,delta)
 
+    def complete(self,tokens,state):
+        for service_name in service_manager.runningServices():
+            name = short_name(service_name)
+            options.append(name)
+            options.append(service_name)
+
+        if state < len(options):
+            return options[state]
+        else:
+            return None
+            
 
 class Starter(Handler):
     def __init__(self):
@@ -162,6 +205,19 @@ class Starter(Handler):
     def help(self,prefix,delta):
         return self.description(prefix,delta)
 
+    def complete(self,tokens,state):
+        running = set(service_manager.runningServices())
+        available = set(service_manager.availableServices())
+        for service_name in available - running:
+            name = short_name(service_name)
+            options.append(name)
+            options.append(service_name)
+
+        if state < len(options):
+            return options[state]
+        else:
+            return None
+            
 
 class Restarter(Starter,Stopper):
     def __init__(self):
@@ -180,6 +236,8 @@ class Restarter(Starter,Stopper):
     def help(self,prefix,delta):
         return self.description(prefix,delta)
 
+    def complete(self,tokens,state):
+        Stopper.complete(self,tokens,state)
 
 class Lister(Handler):
     def __init__(self):
@@ -215,7 +273,7 @@ class Lister(Handler):
         
 
     def list_running(self):
-        running = service_manager.availableServices()
+        running = service_manager.runningServices()
         result = [ self.list_service(service) for service in running]
         if len(result):
             return "".join(result)
@@ -243,6 +301,21 @@ class Lister(Handler):
 
     def help(self,prefix,delta):
         return self.description(prefix,delta)
+
+    def complete(self,tokens,state):
+        options = ["all","running","available"]
+        for service_name in service_manager.availableServices():
+            name = short_name(service_name)
+            options.append(name)
+            options.append(service_name)
+
+        if state < len(options):
+            return options[state]
+        else:
+            return None
+            
+
+
 
 class ExitHandler(Handler):
     def __init__(self):
@@ -278,6 +351,10 @@ main_handler["exit"] = exit_handler
 main_handler["quit"] = exit_handler
 
 
+def complete_tokens(text,state):
+    tokens = shlex.split(readline.get_line_buffer() )
+    return main_handler.complete(tokens,state)
+
 def execute_tokens(tokens):
     try:
         result = main_handler.handle(tokens)
@@ -296,8 +373,12 @@ def start_shell():
             sys.exit(0)
 
         tokens = shlex.split(string)
-        execute_tokens(tokens)
+        if len(tokens) > 0 :
+            execute_tokens(tokens)
 
+
+# Set completer
+readline.set_completer(complete_tokens)
 
 parser = argparse.ArgumentParser(description="""
 CLI for Nepomuk Server.
