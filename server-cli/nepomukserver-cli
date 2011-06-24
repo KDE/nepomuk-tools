@@ -37,7 +37,7 @@ class Handler(dict):
     paragraphs = [""]
 
     def handle(self,tokens):
-	if tokens[0] == "help":
+	if len(tokens) > 0 and tokens[0] == "help":
 	    return self.help("","--")
 	else:
 	    return self.handle_impl(tokens)
@@ -218,7 +218,13 @@ class Lister(Handler):
     def help(self,prefix,delta):
 	return self.description(prefix,delta)
 
+class ExitHandler(Handler):
+    def __init__(self):
+	super(ExitHandler,self).__init__()
+	self.paragraphs = [ "Exit shell. If used in command line, then do nothing ( And what do you expect ? ) " ]
 
+    def handle_impl(self,tokens):
+	sys.exit(0)
 
 service_handler = Handler()
 service_handler["restart"] = Restarter()
@@ -228,6 +234,8 @@ service_handler["list"] = Lister()
 service_handler.paragraphs = [ """ This command provids commands for common operation with Nepomuk services.
 (start, stop etc). It can not be used to execute service-specific command. For such purposes use dynamic
 comands, <service name> <opname> <arg1> <arg2> ... <arg2>""" ]
+
+exit_handler = ExitHandler()
 
 main_handler = Handler()
 main_handler.paragraphs = [ 
@@ -240,6 +248,8 @@ read commands from argv",
 ]
 
 main_handler["service"] = service_handler
+main_handler["exit"] = exit_handler
+main_handler["quit"] = exit_handler
 
 
 def execute_tokens(tokens):
