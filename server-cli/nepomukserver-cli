@@ -4,6 +4,25 @@ import argparse
 import sys
 import dbus
 import textwrap
+import readline
+import os
+import atexit
+
+histfile = os.path.join(os.path.expanduser("~"), ".nepomuktools/nepomukserver-cli.hist")
+
+try:
+    os.mkdir(os.path.join(os.path.expanduser("~"), ".nepomuktools"))
+except OSError:
+    pass
+
+try:
+        readline.read_history_file(histfile)
+except IOError:
+        pass
+
+atexit.register(readline.write_history_file, histfile)
+
+readline.set_history_length(100)
 
 
 service_info = {}
@@ -37,54 +56,54 @@ class Handler(dict):
     paragraphs = [""]
 
     def handle(self,tokens):
-	if len(tokens) > 0 and tokens[0] == "help":
-	    return self.help("","--")
-	else:
-	    return self.handle_impl(tokens)
+        if len(tokens) > 0 and tokens[0] == "help":
+            return self.help("","--")
+        else:
+            return self.handle_impl(tokens)
 
     def handle_impl(self,tokens):
-	first = tokens.pop(0)
-	return self[first].handle(tokens)
+        first = tokens.pop(0)
+        return self[first].handle(tokens)
 
     
     def help(self,prefix,delta):
-	""" Build help string for handler. Build string consists of descripiton of the command + help string for each subcommand"""
-	answer = [ 
-	    self.description(prefix,delta),
-	    '\n\n'
-	    ]
-	for key,value in self.iteritems():
-	    # Form basic string, Then wrap it
-	    #item_desc = value.description(0,len(prefix+delta)
-	    #answer.append("%s%s  %s\n"%(prefix,key,value.description()))
-	    answer.append(prefix)
-	    answer.append(key+":")
-	    answer.append( value.help(prefix + delta,delta) )
-	    answer.append("\n\n")
+        """ Build help string for handler. Build string consists of descripiton of the command + help string for each subcommand"""
+        answer = [ 
+            self.description(prefix,delta),
+            '\n\n'
+            ]
+        for key,value in self.iteritems():
+            # Form basic string, Then wrap it
+            #item_desc = value.description(0,len(prefix+delta)
+            #answer.append("%s%s  %s\n"%(prefix,key,value.description()))
+            answer.append(prefix)
+            answer.append(key+":")
+            answer.append( value.help(prefix + delta,delta) )
+            answer.append("\n\n")
 
-	return " ".join(filter(lambda x: x is not None, answer))
+        return " ".join(filter(lambda x: x is not None, answer))
 
     def description(self,prefix,delta):
-	""" Correctly build description of the command from several paragraphs. 
-	This methon is for developers convincience only
-	"""
-		
-	# First item in list has initial ident == 0
-	subsequent_indent = ' '*(len(prefix)+len(delta))
+        """ Correctly build description of the command from several paragraphs. 
+        This methon is for developers convincience only
+        """
+                
+        # First item in list has initial ident == 0
+        subsequent_indent = ' '*(len(prefix)+len(delta))
 
-	result = [ 
-		textwrap.fill(
-		self.paragraphs[0],
-		initial_indent='',
-		subsequent_indent=subsequent_indent
-		)
-		]
-	# Other items have initial ident == subsequent_indent
-	result += [ textwrap.fill(p,initial_indent=subsequent_indent,subsequent_indent=subsequent_indent)
-		for p in self.paragraphs[1:]
-		]
+        result = [ 
+                textwrap.fill(
+                self.paragraphs[0],
+                initial_indent='',
+                subsequent_indent=subsequent_indent
+                )
+                ]
+        # Other items have initial ident == subsequent_indent
+        result += [ textwrap.fill(p,initial_indent=subsequent_indent,subsequent_indent=subsequent_indent)
+                for p in self.paragraphs[1:]
+                ]
 
-	return "\n".join(result)
+        return "\n".join(result)
 
 
 
@@ -92,139 +111,146 @@ class Handler(dict):
 
 class Stopper(Handler):
     def __init__(self):
-	super(Stopper,self).__init__()
-	self.paragraphs = [ 
-	"Stop service. Be aware that stopping some services(e.g. nepomukstorageservice) will end really bad.", 
-	"Usage: stop <service1> <service2> ... <serviceN>"
-	]
+        super(Stopper,self).__init__()
+        self.paragraphs = [ 
+        "Stop service. Be aware that stopping some services(e.g. nepomukstorageservice) will end really bad.", 
+        "Usage: stop <service1> <service2> ... <serviceN>"
+        ]
     def handle_impl(self,tokens):
-	result = [self.stop(service) for service in tokens]
-	return "".join(result)
+        result = [self.stop(service) for service in tokens]
+        return "".join(result)
 
     def stop(self,service):
-	try :
-	    canonical_name = name_conversation(service)
-	    is_running = service_manager.isServiceRunning(canonical_name)
-	    if is_running :
-		result =  service_manager.stopService(canonical_name)
-		return "Stopping %s %16s\n" % (service, "SUCCESS" if result else "FAIL")
-	    else:
-		return "Service %s not running\n" % service
-	except KeyError:
-	    return  "No such service\n" % service
+        try :
+            canonical_name = name_conversation(service)
+            is_running = service_manager.isServiceRunning(canonical_name)
+            if is_running :
+                result =  service_manager.stopService(canonical_name)
+                return "Stopping %s %16s\n" % (service, "SUCCESS" if result else "FAIL")
+            else:
+                return "Service %s not running\n" % service
+        except KeyError:
+            return  "No such service\n" % service
 
     def help(self,prefix,delta):
-	return self.description(prefix,delta)
+        return self.description(prefix,delta)
 
 
 class Starter(Handler):
     def __init__(self):
-	self.paragraphs = [
-		"Start service. If service is running, then no actions are taken",
-		"Usage: start <service1> <service2> ... <serviceN>"
-		]
+        self.paragraphs = [
+                "Start service. If service is running, then no actions are taken",
+                "Usage: start <service1> <service2> ... <serviceN>"
+                ]
 
     def handle_impl(self,tokens):
-	result = [self.start(service) for service in tokens]
-	return "".join(result)
+        result = [self.start(service) for service in tokens]
+        return "".join(result)
 
     def start(self,service):
-	try :
-	    canonical_name = name_conversation(service)
-	    is_running = service_manager.isServiceRunning(canonical_name)
-	    if not is_running :
-		result = service_manager.startService(canonical_name)
-		return "Starting %s %16s\n" % (service, "SUCCESS" if result else "FAIL")
-	    else:
-		return "Service %s is running\n" % service
-	except KeyError:
-	    return "No such service %s\n" % service
+        try :
+            canonical_name = name_conversation(service)
+            is_running = service_manager.isServiceRunning(canonical_name)
+            if not is_running :
+                result = service_manager.startService(canonical_name)
+                return "Starting %s %16s\n" % (service, "SUCCESS" if result else "FAIL")
+            else:
+                return "Service %s is running\n" % service
+        except KeyError:
+            return "No such service %s\n" % service
 
     def help(self,prefix,delta):
-	return self.description(prefix,delta)
+        return self.description(prefix,delta)
 
 
 class Restarter(Starter,Stopper):
     def __init__(self):
-	super(Restarter,self).__init__()
-	paragraphs = [ "Restart service. If service provides restart() method, then this method will be used. Otherwise service will be stoped and then started.",
-	"Usage: stop <service1> <service2> ... <serviceN>"
-	]
+        super(Restarter,self).__init__()
+        paragraphs = [ "Restart service. If service provides restart() method, then this method will be used. Otherwise service will be stoped and then started.",
+        "Usage: stop <service1> <service2> ... <serviceN>"
+        ]
 
     def handle_impl(self,tokens):
-	result = [ self.restart(service) for service in tokens]
-	return "".join(result) 
+        result = [ self.restart(service) for service in tokens]
+        return "".join(result) 
 
     def restart(self,service):
-	return self.stop(service) + self.start(service)
+        return self.stop(service) + self.start(service)
 
     def help(self,prefix,delta):
-	return self.description(prefix,delta)
+        return self.description(prefix,delta)
 
 
 class Lister(Handler):
     def __init__(self):
-	super(Lister,self).__init__()
+        super(Lister,self).__init__()
 
-	self.paragraphs = [
-		"List status of the services. Displays whether service is running or not and some other information",
-		"Usage:",
-		"list <service1> <service2> ... <serviceN>",
-		"list all|available|running",
-		"In first invocation, lists statuses of selected services. In second invocation lists statuses of all available services( 'all' or 'available' ) or statuses of running services "
-		]
+        self.paragraphs = [
+                "List status of the services. Displays whether service is running or not and some other information",
+                "Usage:",
+                "list <service1> <service2> ... <serviceN>",
+                "list all|available|running",
+                "In first invocation, lists statuses of selected services. In second invocation lists statuses of all available services( 'all' or 'available' ) or statuses of running services "
+                ]
 
     def handle_impl(self,tokens):
-	if any(map(lambda x:x == "all" or x == 'available',tokens)):
-	    return self.list_available()
+        if any(map(lambda x:x == "all" or x == 'available',tokens)):
+            return self.list_available()
 
-	elif any(map(lambda x:x == "running",tokens)):
-	    return self.list_running()
+        elif any(map(lambda x:x == "running",tokens)):
+            return self.list_running()
 
-	else:
-	    result = [ self.list_service(service) for service in tokens]
-	    return "".join(result)
+        else:
+            result = [ self.list_service(service) for service in tokens]
+            return "".join(result)
 
 
     def list_available(self):
-	available = service_manager.availableServices()
-	result = [ self.list_service(service) for service in available]
-	return "".join(result)
+        available = service_manager.availableServices()
+        result = [ self.list_service(service) for service in available]
+        if len(result):
+            return "".join(result)
+        else:
+            return "No service available"
+        
 
     def list_running(self):
-	running = service_manager.availableServices()
-	result = [ self.list_service(service) for service in running]
-	return "".join(result)
+        running = service_manager.availableServices()
+        result = [ self.list_service(service) for service in running]
+        if len(result):
+            return "".join(result)
+        else:
+            return "No service is running"
 
     def list_service(self,service):
-	try :
-	    canonical_name = name_conversation(service)
-	    is_running = service_manager.isServiceRunning(canonical_name)
-	    output = []
-	    format_string = "%-8s %s\n"
-	    if ( is_running ):
-		#sa = service_address(canonical_name)
-		#sop = service_object_path(canonical_name)
-		#service_object = session_bus.get_object(
-		#    sa,sop)
-		output = ['r',service]
-	    else:
-		output = ['n',service]
+        try :
+            canonical_name = name_conversation(service)
+            is_running = service_manager.isServiceRunning(canonical_name)
+            output = []
+            format_string = "%-8s %s\n"
+            if ( is_running ):
+                #sa = service_address(canonical_name)
+                #sop = service_object_path(canonical_name)
+                #service_object = session_bus.get_object(
+                #    sa,sop)
+                output = ['r',service]
+            else:
+                output = ['n',service]
 
-	    return format_string % tuple(output)
-	except KeyError:
-	    return "No such service %s\n" %( service,)
+            return format_string % tuple(output)
+        except KeyError:
+            return "No such service %s\n" %( service,)
 
     def help(self,prefix,delta):
-	return self.description(prefix,delta)
+        return self.description(prefix,delta)
 
 class ExitHandler(Handler):
     def __init__(self):
-	super(ExitHandler,self).__init__()
-	self.paragraphs = [ "Exit shell. If used in command line, then do nothing ( And what do you expect ? ) " ]
+        super(ExitHandler,self).__init__()
+        self.paragraphs = [ "Exit shell. If used in command line, then do nothing ( And what do you expect ? ) " ]
 
     def handle_impl(self,tokens):
-	sys.exit(0)
+        sys.exit(0)
 
 service_handler = Handler()
 service_handler["restart"] = Restarter()
@@ -254,16 +280,23 @@ main_handler["quit"] = exit_handler
 
 def execute_tokens(tokens):
     try:
-	result = main_handler.handle(tokens)
-	print result
+        result = main_handler.handle(tokens)
+        print result
     except IndexError:
-	print "Not enough arguments"
+        print "Not enough arguments"
     except KeyError,e:
-	print "Unknow command", e
+        print "Unknow command", e
 
 
 def start_shell():
-    pass
+    while 1:
+        try:
+            string = raw_input('server> ')
+        except EOFError:
+            sys.exit(0)
+
+        tokens = shlex.split(string)
+        execute_tokens(tokens)
 
 
 parser = argparse.ArgumentParser(description="""
@@ -293,3 +326,6 @@ if len(sys.argv) > 1:
 else:
     # Start interactive shell
     start_shell()
+
+
+# vim:ts=4:expandtab:sw=4
