@@ -7,6 +7,9 @@ import textwrap
 import readline
 import os
 import atexit
+import subprocess
+import time
+
 
 histfile = os.path.join(os.path.expanduser("~"), ".nepomuktools/nepomukserver-cli.hist")
 
@@ -25,6 +28,137 @@ atexit.register(readline.write_history_file, histfile)
 readline.set_history_length(100)
 readline.parse_and_bind("tab: complete")
 
+
+session_bus = None
+session_bus = dbus.SessionBus()
+
+class ServerException(Exception):
+    pass
+
+class Server(object):
+    def __init__(self):
+        self.null = open('/dev/null','w')
+        self.server = None
+        self.server_interface = None         
+        self.service_manager = None   
+        self.service_manager_interface = None
+        
+
+    def try_connect_to_server(self):
+
+        self.server = session_bus.get_object("org.kde.NepomukServer","/nepomukserver")
+        self.server_interface = dbus.Interface(self.server,dbus_interface="org.kde.NepomukServer")
+
+        self.service_manager = session_bus.get_object("org.kde.NepomukServer","/servicemanager")
+        self.service_manager_interface = dbus.Interface(self.service_manager,dbus_interface = "org.kde.nepomuk.ServiceManager")
+
+    def reset_connection_to_server(self):
+        self.server = None
+        self.server_interface = None         
+        self.service_manager = None   
+        self.service_manager_interface = None
+        
+    def connect_to_server(self):
+        if self.server is not None:
+            #print "Already connected"
+            return True
+
+        success = False
+        for i in range(5,-1,-1):
+            print "Connecting to server (%s)" % i
+            try:
+                self.try_connect_to_server()
+            except dbus.DBusException,e:
+                self.reset_connection_to_server()
+                print "DBus error while connecting to server", e
+                time.sleep(5 - i)
+                pass
+            else:
+                success = True
+                break
+
+        return success
+
+    def is_connected(self):
+        return self.service_manager_interface is not None
+
+    def reconfigure(self):
+        if self.server is None:
+            raise ServerException
+
+        return self.server_interface.reconfigure()
+
+    def start(self):
+        if self.server is None:
+            if session_bus.name_has_owner("org.kde.NepomukServer"):
+                success = self.connect_to_server()
+            else:
+                subprocess.call("nepomukserver",stdout=self.null,stderr=self.null)
+                print "Waiting 10 seconds untill server initialize"
+                time.sleep(10)
+                success = self.connect_to_server()
+            return success
+        else:
+            return True
+
+    def stop(self):
+        if self.server is None:
+            raise ServerException
+
+        self.server_interface.quit()
+        self.reset_connection_to_server()
+
+    def runningServices(self):
+        if self.service_manager_interface is None:
+            raise ServerException
+
+        return self.service_manager_interface.runningServices()
+
+    def availableServices(self):
+        if self.service_manager_interface is None:
+            raise ServerException
+        return self.service_manager_interface.availableServices()
+
+    def startService(self,service_sysname):
+        if self.service_manager_interface is None:
+            raise ServerException
+
+        return self.service_manager_interface.startService(service_sysname)
+    
+    def stopService(self,service_sysname):
+        if self.service_manager_interface is None:
+            raise ServerException
+
+        return self.service_manager_interface.stopService(service_sysname)
+
+    def isServiceRunning(self,service_sysname):
+        if self.service_manager_interface is None:
+            raise ServerException
+
+        return self.service_manager_interface.isServiceRunning(service_sysname)
+
+    def status(self):
+        if self.service_manager_interface is None:
+            raise ServerException
+
+        running = self.service_manager.runningServices()
+        available = self.service_manager.availableServices()
+
+        if len(available) > 0:
+            # Server is running
+            return "NepomukServer is running with %s services running\nand %s  more not running" % ( len(running),(len(available) - len(running)))
+        else:
+            if session_bus.name_has_owner("org.kde.NepomukServer"):
+                return "NepomukServer is running but without any service"
+            else:
+                return "NepomukServer is not running"
+
+    def reconnect(self):
+        self.reset_connection_to_server()
+        self.connect_to_server()
+
+
+server = Server()
 
 service_info = {}
 service_shortcuts = {}
@@ -149,15 +283,17 @@ class Stopper(Handler):
         "Usage: stop <service1> <service2> ... <serviceN>"
         ]
     def handle_impl(self,tokens):
+        if not server_connected():
+            return 
         result = [self.stop(service) for service in tokens]
         return "".join(result)
 
     def stop(self,service):
         try :
             canonical_name = name_conversation(service)
-            is_running = service_manager.isServiceRunning(canonical_name)
+            is_running = server.isServiceRunning(canonical_name)
             if is_running :
-                result =  service_manager.stopService(canonical_name)
+                result =  server.stopService(canonical_name)
                 return "Stopping %s %16s\n" % (service, "SUCCESS" if result else "FAIL")
             else:
                 return "Service %s not running\n" % service
@@ -168,7 +304,7 @@ class Stopper(Handler):
         return self.description(prefix,delta)
 
     def complete(self,tokens,state):
-        for service_name in service_manager.runningServices():
+        for service_name in server.runningServices():
             name = short_name(service_name)
             options.append(name)
             options.append(service_name)
@@ -193,9 +329,9 @@ class Starter(Handler):
     def start(self,service):
         try :
             canonical_name = name_conversation(service)
-            is_running = service_manager.isServiceRunning(canonical_name)
+            is_running = server.isServiceRunning(canonical_name)
             if not is_running :
-                result = service_manager.startService(canonical_name)
+                result = server.startService(canonical_name)
                 return "Starting %s %16s\n" % (service, "SUCCESS" if result else "FAIL")
             else:
                 return "Service %s is running\n" % service
@@ -206,8 +342,8 @@ class Starter(Handler):
         return self.description(prefix,delta)
 
     def complete(self,tokens,state):
-        running = set(service_manager.runningServices())
-        available = set(service_manager.availableServices())
+        running = set(server.runningServices())
+        available = set(server.availableServices())
         for service_name in available - running:
             name = short_name(service_name)
             options.append(name)
@@ -264,7 +400,7 @@ class Lister(Handler):
 
 
     def list_available(self):
-        available = service_manager.availableServices()
+        available = server.availableServices()
         result = [ self.list_service(service) for service in available]
         if len(result):
             return "".join(result)
@@ -273,7 +409,7 @@ class Lister(Handler):
         
 
     def list_running(self):
-        running = service_manager.runningServices()
+        running = server.runningServices()
         result = [ self.list_service(service) for service in running]
         if len(result):
             return "".join(result)
@@ -283,7 +419,7 @@ class Lister(Handler):
     def list_service(self,service):
         try :
             canonical_name = name_conversation(service)
-            is_running = service_manager.isServiceRunning(canonical_name)
+            is_running = server.isServiceRunning(canonical_name)
             output = []
             format_string = "%-8s %s\n"
             if ( is_running ):
@@ -303,11 +439,18 @@ class Lister(Handler):
         return self.description(prefix,delta)
 
     def complete(self,tokens,state):
+        if len(tokens) ==  0:
+            token = ""
+        else:
+            token = tokens[0]
+
         options = ["all","running","available"]
-        for service_name in service_manager.availableServices():
+        for service_name in server.availableServices():
             name = short_name(service_name)
             options.append(name)
             options.append(service_name)
+
+        options = filter( lambda x: x.startswith(token), options )
 
         if state < len(options):
             return options[state]
@@ -324,6 +467,89 @@ class ExitHandler(Handler):
 
     def handle_impl(self,tokens):
         sys.exit(0)
+
+class ServerHandler(Handler):
+    def __init__(self):
+        super(ServerHandler,self).__init__()
+        self.paragraphs = [ "Operations with Nepomuk server. Start, stop, reconfigure. ",
+                "Usage: server start|stop|reconfigure|restart|status "]
+        self.null = open('/dev/null','w')
+
+    def handle_impl(self,tokens):
+        command = tokens[0]
+        if command == "reconfigure":
+            return self.reconfigure()
+        elif command == "stop":
+            return self.stop()
+        elif command == "start":
+            return self.start()
+        elif command == "restart":
+            return "".join([self.stop(),'\n', self.start()])
+        elif command == "status":
+            return self.status()
+        elif command == "reconnect":
+            return self.reconnect()
+        else:
+            return "Unknow command"
+
+    def reconfigure(self):
+        if server.reconfigure():
+            return "Reconfiguration succeeded"
+        else:
+            return "Reconfiguration failed"
+
+    def start(self):
+        if session_bus.name_has_owner("org.kde.NepomukServer"):
+            if not server.is_connected():
+                server.connect_to_server()
+
+            if server.is_connected():
+                return "NepomukServer is already running"
+            else:
+                return "NepomukServer already running, but I can't connect to it"
+        else:
+            success = server.start()
+
+            if success and session_bus.name_has_owner("org.kde.NepomukServer"):
+                return "NepomukServer started"
+            else:
+                return "NepomukServer failed to start. Or delay was too large. Just try to see it's status"
+
+    def stop(self):
+        server.stop()
+
+    def status(self):
+        return server.status()
+
+    def reconnect(self):
+        return server.reconnect()
+
+    def complete(self,tokens,state):
+        if len(tokens) > 1:
+            return None
+
+        if len(tokens) == 0:
+            token = ""
+        else:
+            token = tokens[0]
+
+        options = ["start","stop","restart","reconfigure","status","reconnect"]
+
+        options = [ x for x in options if x.startswith(token) ]
+        #print "Options: ",options
+        if state < len(options):
+            return options[state]
+        else:
+            return None
+        if state < len(options):
+
+            return options[state]
+        else:
+            return None
+            
+
+            
+
 
 service_handler = Handler()
 service_handler["restart"] = Restarter()
@@ -347,6 +573,7 @@ read commands from argv",
 ]
 
 main_handler["service"] = service_handler
+main_handler["server"] = ServerHandler()
 main_handler["exit"] = exit_handler
 main_handler["quit"] = exit_handler
 
@@ -363,6 +590,10 @@ def execute_tokens(tokens):
         print "Not enough arguments"
     except KeyError,e:
         print "Unknow command", e
+    except dbus.DBusException,e:
+        print "Error in DBus. May be NepomukServer/some service is not running or not responding",e
+    except ServerException:
+        print "Not connected to server. Try execute 'server start'"
 
 
 def start_shell():
@@ -389,18 +620,9 @@ parser.add_argument('tokens', metavar='TOKEN', type=str,nargs='*')
 
 args = parser.parse_args()
 
-try: 
-    session_bus = dbus.SessionBus()
 
-    server = session_bus.get_object("org.kde.NepomukServer","/nepomukserver")
-    server_interface = dbus.Interface(server,dbus_interface="ork.kde.NepomukServer")
-
-    service_manager = session_bus.get_object("org.kde.NepomukServer","/servicemanager")
-    service_manager_interface = dbus.Interface(service_manager,dbus_interface = "org.kde.Nepomuk.ServiceManager")
-
-except dbus.DBusException:
+if not server.connect_to_server():
     print "Can not connect to NepomukServer. Either NepomukServer or DBus are broken" 
-    sys.exit(1)
 
 if len(sys.argv) > 1:
     execute_tokens(sys.argv[1:])
