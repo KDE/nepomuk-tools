@@ -1,0 +1,13 @@
+Installation
+===================
+
+To install, make a build directory. In this build directory:
+
+1. user@build> ccmake /path/to/source/directory
+2. select necessary utilities and settings
+3. make
+4. make install
+
+Dependencies are different for every tool:
+
+nepomukserver-cli: no dependency, except Python
