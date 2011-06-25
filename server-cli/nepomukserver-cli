@@ -9,6 +9,8 @@ import os
 import atexit
 import subprocess
 import time
+import xml.dom.minidom
+import itertools
 
 
 histfile = os.path.join(os.path.expanduser("~"), ".nepomuktools/nepomukserver-cli.hist")
@@ -186,7 +188,7 @@ def service_address(service_name):
     return "org.kde.nepomuk.services."+name
 
 def service_object_path(service_name):
-    return  name_conversation(service_name)
+    return  "/" + name_conversation(service_name)
 
 def short_name(service_name):
     try:
@@ -255,9 +257,12 @@ class Handler(dict):
             return None
         if len(tokens) == 1:
             token = tokens[0]
+            #print "token: ",token
             if token in self.iterkeys():
                 return self[token].complete(tokens[1:],state)
             else:
+                #for k in self.iterkeys():
+                #     print "variant: ",k
                 options = [ x for x in self.iterkeys() if x.startswith(token) ]
                 #print "Options: ",options
                 if state < len(options):
@@ -548,8 +553,123 @@ class ServerHandler(Handler):
             return None
             
 
+def method_description(method_elem):
+    answer = [  method_elem.getAttribute("name") ]
+    arguments_dom = method_elem.getElementsByTagName("arg")
+    for argument in arguments_dom:
+        answer.append("%s:%s" % 
+                ( argument.getAttribute("name"), argument.getAttribute("type") )
+                    )
+
+    return " ".join(answer)
+
+
             
 
+class DynamicCommand(Handler):
+    def __init__(self,service_name):
+        try:
+            self.sysname = name_conversation(service_name)
+        except KeyError:
+            # This is in case some service do appear, but is not 
+            # registered to this utility
+            self.sysname = service_name
+
+        self.obj = session_bus.get_object(service_address(self.sysname),service_object_path(self.sysname))
+        self.introspection = xml.dom.minidom.parseString(
+                str(
+                    self.obj.Introspect()
+                    )
+                )
+        self.methods = self.introspection.getElementsByTagName("method")
+        self.method_names = []
+        for method in self.methods:
+            self.method_names.append(method.getAttribute("name"))
+        
+        self.paragraphs = [ "Dynamic command for service %s" % self.sysname,
+                "Usage: ",
+                "%s - list all available methods",
+                "%s <method_name> <arg1> <arg2> ... <argN> - call selected method with given arguments"
+                ]
+
+    def handle_impl(self,tokens):
+        result = []
+        try:
+            if len(tokens) == 0:
+                ## Just list all available methods
+                for method in self.methods:
+                    result.append(method_description(method))
+
+                return "\n".join(result)
+            else:
+                methname = tokens.pop(0)
+                try:
+                    call = getattr(self.obj,methname)
+                except AttributeError:
+                    return "No such method %s" % methname
+
+                return str(call(*tokens))
+        except dbus.DBusException,e:
+            return "No such method or incorrect type/number of arguments. DBus eror is %s" % (e,)
+
+    def complete(self,tokens,state):
+        #print "complete. tokens: ", tokens
+        ## We can complete only methods names
+        if len(tokens) > 1:
+            return None
+        elif len(tokens) == 0:
+            token = ""
+        else:
+            token = tokens[0]
+
+        answer = filter( lambda x: x.startswith(token), self.method_names )
+
+        if state < len(answer):
+            return answer[state]
+        else:
+            return None
+        
+    
+
+
+class MainHandler(Handler):
+    def __init__(self):
+        super(MainHandler,self).__init__()
+
+    def __contains__(self,key):
+        if server.is_connected():
+            return key in server.runningServices()
+        else:
+            return False
+
+    def __getitem__(self,key):
+        if  super(MainHandler,self).__contains__(key):
+            return super(MainHandler,self).__getitem__(key)
+        elif server.is_connected():
+            running = server.runningServices()
+            # Get FQN
+            full_name = name_conversation(key)
+
+            if full_name in running:
+                return DynamicCommand(key) 
+            else:
+                raise KeyError
+        else:
+            raise KeyError 
+
+    def iterkeys(self):
+        if server.is_connected():
+            running = server.runningServices()
+            return itertools.chain(
+                    iter(running),
+                    filter( 
+                        lambda x: x is not None,
+                        map( lambda x : short_name(x), running   )
+                        ),
+                    super(MainHandler,self).iterkeys()
+                    )
+        else:
+            return super(MainHandler,self).iterkeys()
 
 service_handler = Handler()
 service_handler["restart"] = Restarter()
@@ -562,7 +682,7 @@ comands, <service name> <opname> <arg1> <arg2> ... <arg2>""" ]
 
 exit_handler = ExitHandler()
 
-main_handler = Handler()
+main_handler = MainHandler()
 main_handler.paragraphs = [ 
 "This small utility is intended to control Nepomuk Server from command line. \
 It can work as a shell( repeatedly reading commands from STDIN and executing them) or \
@@ -570,6 +690,10 @@ read commands from argv",
 "Examples:",
 "Restart strigi: nepomukserver-cli service restart strigi",
 "See running services: nepomukserver-cli list running"
+"There are dynamic commands. This is commands that appear only if service is running. To call dynamic command use service name ( any, system or user ). If this service is running, then it will execute given method. If it is not running, then shell will report unknow command. To see running services use 'service list running'. See usage below"
+"Dynamic commands usage:"
+"<service_name> - list availabe methods and their signature. Any of service names can be used, e.g. strigi or nepomukstrigiservice"
+"<service_name> <method_name> <arg1> <arg2> ... <argN> - call given method with given arguments. No checks are performed and all errors will be reported as DBus errors"
 ]
 
 main_handler["service"] = service_handler
