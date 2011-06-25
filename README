@@ -9,3 +9,34 @@ if services is Introspecatable ). Works in two modes -
 as command line utility, reading commands from argv
 or as shell, constantly reading commands from
 stdin until 'exit' or Ctrl-D
+Usage: 
+[ You can start nepomukserver-cli as shell to avoid
+constantly typing it's executable name ]
+-nepomukserver-cli help 
+    show help
+
+- nepomukserver-cli <command>  help
+    show help for command
+- nepomukserver-cli <command> <subcommand> ... <arg1> .... 
+    run given sub...subcommand with given arguments
+
+More specifig:
+- nepomukserver-cli services list all
+    list available services
+
+- nepomukserver-cli services list running
+    list running services
+
+Dynamic commands - these commands exists only if service
+is running
+- nepomukserver-cli <service_name> <method_name> <arg1> ... 
+    call given method with given arguments. Some assumptions
+    about DBus layout of service are made.
+
+- nepomukserver-cli strigi isIndexing
+    return result of callind "org.kde.nepomuk.nepomukstrigiservice",
+    object "/nepomukstrigiservice", method='isIndexing'
+
+- nepomukserver-cli strigi help 
+    Make an introspection of all methods in given service
+    and return their description.
