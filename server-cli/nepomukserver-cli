@@ -109,6 +109,7 @@ class Server(object):
 
         self.server_interface.quit()
         self.reset_connection_to_server()
+        return True
 
     def runningServices(self):
         if self.service_manager_interface is None:
@@ -521,7 +522,13 @@ class ServerHandler(Handler):
                 return "NepomukServer failed to start. Or delay was too large. Just try to see it's status"
 
     def stop(self):
-        server.stop()
+        
+        success = server.stop()
+        if success:
+            ## Two string used below instead of one just in case
+            return "\n".join( [ "Server stopped", "It may take time( up to 2-3 min) before server really stops. If you run server start again before this minutes, it will connect back to this server, but later connection will fail with DBus No-Reply errors" ] )
+        else:
+            return "Server stopping failed" 
 
     def status(self):
         return server.status()
