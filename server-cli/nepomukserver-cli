@@ -11,6 +11,7 @@ import subprocess
 import time
 import xml.dom.minidom
 import itertools
+import json
 
 
 histfile = os.path.join(os.path.expanduser("~"), ".nepomuktools/nepomukserver-cli.hist")
@@ -301,7 +302,7 @@ class Stopper(Handler):
         "Usage: stop <service1> <service2> ... <serviceN>"
         ]
     def handle_impl(self,tokens):
-        if not server_connected():
+        if not server.is_connected():
             return 
         result = [self.stop(service) for service in tokens]
         return "".join(result)
@@ -323,15 +324,28 @@ class Stopper(Handler):
         return self.description(prefix,delta)
 
     def complete(self,tokens,state):
-        for service_name in server.runningServices():
-            name = get_shortcut_name(service_name)
-            options.append(name)
-            options.append(service_name)
+        try:
+            if len(tokens) > 0:
+                token = tokens[0]
+            else:
+                token = ""
 
-        if state < len(options):
-            return options[state]
-        else:
-            return None
+            #print "Token: ", token
+
+            options = []
+            for service_name in server.runningServices():
+                name = get_shortcut_name(service_name)
+                if name.startswith(token):
+                    options.append(name)
+                if service_name.startswith(token):
+                    options.append(service_name)
+
+            if state < len(options):
+                return options[state]
+            else:
+                return None
+        except:
+            print "Dev. bug. Some exception"
             
 
 class Starter(Handler):
@@ -362,12 +376,20 @@ class Starter(Handler):
         return self.description(prefix,delta)
 
     def complete(self,tokens,state):
+        if len(tokens) > 0:
+            token = tokens[0]
+        else:
+            token = ""
+
+        options = []
         running = set(server.runningServices())
         available = set(server.availableServices())
         for service_name in available - running:
             name = get_shortcut_name(service_name)
-            options.append(name)
-            options.append(service_name)
+            if name.startswith(token):
+                options.append(name)
+            if service_name.startswith(token):
+                options.append(service_name)
 
         if state < len(options):
             return options[state]
@@ -393,7 +415,7 @@ class Restarter(Starter,Stopper):
         return self.description(prefix,delta)
 
     def complete(self,tokens,state):
-        Stopper.complete(self,tokens,state)
+        return Stopper.complete(self,tokens,state)
 
 class Lister(Handler):
     def __init__(self):
@@ -611,7 +633,7 @@ class DynamicCommand(Handler):
         self.paragraphs = [ "Dynamic command for service %s" % self.sysname,
                 "Usage: ",
                 "%s - list all available methods" % self.sysname,
-                "%s <method_name> <arg1> <arg2> ... <argN> - call selected method with given arguments" % self.sysname
+                "%s <method_name> <arg1> <arg2> ... <argN> - call selected method with given arguments\nAttention: arguments are parset with JSON. So string 'abc' must be in form '\"abc\"' (Note 2 pair of quotes)" % self.sysname
                 ]
 
     def handle_impl(self,tokens):
@@ -627,10 +649,19 @@ class DynamicCommand(Handler):
                 methname = tokens.pop(0)
                 try:
                     call = getattr(self.obj,methname)
-                except AttributeError:
+                except (AttributeError,ValueError):
                     return "No such method %s" % methname
 
-                return str(call(*tokens))
+                ## Now load all aguments with json module
+                arguments = []
+                try:
+                    for token in tokens:
+                        arguments.append( json.loads(token) )
+                except ValueError,e:
+                    return "Cant parse argument %s with JSON. Error was %s" % ( len(arguments), e)
+
+                return str(call(*arguments))
+
         except dbus.DBusException,e:
             return "No such method or incorrect type/number of arguments. DBus eror is %s" % (e,)
 
