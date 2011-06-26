@@ -37,6 +37,11 @@ session_bus = dbus.SessionBus()
 class ServerException(Exception):
     pass
 
+class NoSuchService(Exception):
+    def __init__(self,name):
+        self.name = name
+    pass
+
 class Server(object):
     def __init__(self):
         self.null = open('/dev/null','w')
@@ -78,10 +83,6 @@ class Server(object):
             else:
                 success = True
                 break
-
-        if success:
-            for service_name in self.availableServices():
-                register_info(service_name,service_name)
 
         return success
 
@@ -164,42 +165,49 @@ class Server(object):
         self.reset_connection_to_server()
         self.connect_to_server()
 
+    def assert_service_exists(self,service_name):
+        service_name = get_cannonical_name(service_name)
+        if service_name not in self.availableServices():
+            raise NoSuchService(service_name)
+
 
 server = Server()
 
 service_info = {}
 service_shortcuts = {}
-def register_info(user_name,service_name):
+def register_shortcut(user_name,service_name):
     service_info[user_name] = service_name
-    service_info[service_name] = service_name
     service_shortcuts[service_name] = user_name
     service_shortcuts[user_name] = user_name
 
 
-register_info('strigi' , 'nepomukstrigiservice')
-register_info('query' , "nepomukqueryservice") 
-register_info('digikam' , "digikamnepomukservice")
-register_info('storage' , "nepomukstorage") 
-register_info('removablestorage' , "nepomukremovablestorageservice") 
-register_info('backupsync' , "nepomukbackupsync") 
-register_info('filewatch' , "nepomukfilewatch" )
+register_shortcut('strigi' , 'nepomukstrigiservice')
+register_shortcut('query' , "nepomukqueryservice") 
+register_shortcut('digikam' , "digikamnepomukservice")
+register_shortcut('storage' , "nepomukstorage") 
+register_shortcut('removablestorage' , "nepomukremovablestorageservice") 
+register_shortcut('backupsync' , "nepomukbackupsync") 
+register_shortcut('filewatch' , "nepomukfilewatch" )
 
-def name_conversation(service_name):
+def get_cannonical_name(service_name):
      name = service_name.lower()
-     return service_info[name]
+     try:
+         return service_info[name]
+     except KeyError:
+         return service_name
 
 def service_address(service_name):
-    name = name_conversation(service_name)
+    name = get_cannonical_name(service_name)
     return "org.kde.nepomuk.services."+name
 
 def service_object_path(service_name):
-    return  "/" + name_conversation(service_name)
+    return  "/" + get_cannonical_name(service_name)
 
-def short_name(service_name):
+def get_shortcut_name(service_name):
     try:
         return service_shortcuts[service_name]
     except KeyError:
-        return None
+        return service_name
 
 
 class Handler(dict):
@@ -300,7 +308,8 @@ class Stopper(Handler):
 
     def stop(self,service):
         try :
-            canonical_name = name_conversation(service)
+            server.assert_service_exists(service)
+            canonical_name = get_cannonical_name(service)
             is_running = server.isServiceRunning(canonical_name)
             if is_running :
                 result =  server.stopService(canonical_name)
@@ -315,7 +324,7 @@ class Stopper(Handler):
 
     def complete(self,tokens,state):
         for service_name in server.runningServices():
-            name = short_name(service_name)
+            name = get_shortcut_name(service_name)
             options.append(name)
             options.append(service_name)
 
@@ -338,7 +347,8 @@ class Starter(Handler):
 
     def start(self,service):
         try :
-            canonical_name = name_conversation(service)
+            server.assert_service_exists(service)
+            canonical_name = get_cannonical_name(service)
             is_running = server.isServiceRunning(canonical_name)
             if not is_running :
                 result = server.startService(canonical_name)
@@ -355,7 +365,7 @@ class Starter(Handler):
         running = set(server.runningServices())
         available = set(server.availableServices())
         for service_name in available - running:
-            name = short_name(service_name)
+            name = get_shortcut_name(service_name)
             options.append(name)
             options.append(service_name)
 
@@ -411,7 +421,7 @@ class Lister(Handler):
 
     def list_available(self):
         available = server.availableServices()
-        result = [ self.list_service(service) for service in available]
+        result = [ self.service_status(service) for service in available]
         if len(result):
             return "".join(result)
         else:
@@ -420,30 +430,31 @@ class Lister(Handler):
 
     def list_running(self):
         running = server.runningServices()
-        result = [ self.list_service(service) for service in running]
+        result = [ self.service_status(service) for service in running]
         if len(result):
             return "".join(result)
         else:
             return "No service is running"
 
     def list_service(self,service):
-        try :
-            canonical_name = name_conversation(service)
-            is_running = server.isServiceRunning(canonical_name)
-            output = []
-            format_string = "%-8s %s\n"
-            if ( is_running ):
-                #sa = service_address(canonical_name)
-                #sop = service_object_path(canonical_name)
-                #service_object = session_bus.get_object(
-                #    sa,sop)
-                output = ['r',service]
-            else:
-                output = ['n',service]
+        server.assert_service_exists(service)
+        return self.service_status(service)
 
-            return format_string % tuple(output)
-        except KeyError:
-            return "No such service %s\n" %( service,)
+    def service_status(self,service_name):
+        canonical_name = get_cannonical_name(service_name)
+        is_running = server.isServiceRunning(canonical_name)
+        output = []
+        format_string = "%-8s %s\n"
+        if ( is_running ):
+            #sa = service_address(canonical_name)
+            #sop = service_object_path(canonical_name)
+            #service_object = session_bus.get_object(
+            #    sa,sop)
+            output = ['r',service_name]
+        else:
+            output = ['n',service_name]
+
+        return format_string % tuple(output)
 
     def help(self,prefix,delta):
         return self.description(prefix,delta)
@@ -456,7 +467,7 @@ class Lister(Handler):
 
         options = ["all","running","available"]
         for service_name in server.availableServices():
-            name = short_name(service_name)
+            name = get_shortcut_name(service_name)
             options.append(name)
             options.append(service_name)
 
@@ -580,7 +591,7 @@ def method_description(method_elem):
 class DynamicCommand(Handler):
     def __init__(self,service_name):
         try:
-            self.sysname = name_conversation(service_name)
+            self.sysname = get_cannonical_name(service_name)
         except KeyError:
             # This is in case some service do appear, but is not 
             # registered to this utility
@@ -659,7 +670,7 @@ class MainHandler(Handler):
         elif server.is_connected():
             running = server.runningServices()
             # Get FQN
-            full_name = name_conversation(key)
+            full_name = get_cannonical_name(key)
 
             if full_name in running:
                 return DynamicCommand(key) 
@@ -675,7 +686,7 @@ class MainHandler(Handler):
                     iter(running),
                     filter( 
                         lambda x: x is not None,
-                        map( lambda x : short_name(x), running   )
+                        map( lambda x : get_shortcut_name(x), running   )
                         ),
                     super(MainHandler,self).iterkeys()
                     )
@@ -729,6 +740,8 @@ def execute_tokens(tokens):
         print "Error in DBus. May be NepomukServer/some service is not running or not responding",e
     except ServerException:
         print "Not connected to server. Try execute 'server start'"
+    except NoSuchService,e:
+        print "No such service %s" % e.name
 
 
 def start_shell():
