@@ -79,6 +79,10 @@ class Server(object):
                 success = True
                 break
 
+        if success:
+            for service_name in self.availableServices():
+                register_info(service_name,service_name)
+
         return success
 
     def is_connected(self):
@@ -595,8 +599,8 @@ class DynamicCommand(Handler):
         
         self.paragraphs = [ "Dynamic command for service %s" % self.sysname,
                 "Usage: ",
-                "%s - list all available methods",
-                "%s <method_name> <arg1> <arg2> ... <argN> - call selected method with given arguments"
+                "%s - list all available methods" % self.sysname,
+                "%s <method_name> <arg1> <arg2> ... <argN> - call selected method with given arguments" % self.sysname
                 ]
 
     def handle_impl(self,tokens):
